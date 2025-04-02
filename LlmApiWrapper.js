@@ -1,21 +1,26 @@
-const fetch = require("node-fetch");
-const { OpenAI } = require("openai");
-const { Agents } = require("openai-agents")
-require("dotenv").config();
+// Enhanced LlmApiWrapper with robust parsing and fallback mechanisms
+import fetch from "node-fetch";
+import { OpenAI } from "openai";
+import { OpenAIAgent } from 'openai-agents';
+import dotenv from 'dotenv';
+dotenv.config();
 
 class LlmApiWrapper {
     constructor(tools) {
         this.model = process.env.MODEL;
         this.agentModel = process.env.AGENT_MODEL;
         this.baseUrl = process.env.LMSTUDIO_BASE_URL || "http://10.0.0.243:1234/v1/completions";
-        this.messages = [];
+        this.messages = [
+            {
+              role: "system",
+              content:
+                "You are a helpful assistant. Only use the functions you have been provided with.",
+            },
+        ];
         this.tools = tools;
         this.agent = null;
-
-        if (!process.env.LMSTUDIO_AGENT){
-            this.initAgent(tools);
+        if (process.env.LMSTUDIO_AGENT == "false"){
             this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-            this.agents = new Agents({openai: this.openai})
         }
     }
 
@@ -55,32 +60,36 @@ class LlmApiWrapper {
         }
     }
 
-    async initAgent(tools) {
-        if (this.agent) return this.agent;
-
-        console.log("Initializing OpenAI Agent...");
-
-        this.agent = await this.agents.createAgent({
-            instructions: "You are a helpful assistant. Use the provided tools when necessary.",
-            model: this.OPEN_AI_MODEL,
-            tools: this.tools
-        });
-
-        return this.agent;
+    async callAgent(userInput){
+        if (process.env.LMSTUDIO_AGENT == "false"){
+            return await this.callOpenAIAgent(userInput);
+        } else {
+            return await this.callLmstudioAgent(userInput)
+        }
     }
 
-    async callLmstudioAgent(userInput, tools = []) {
-        console.log(`Calling LM Studio (Model: ${this.agentModel})...`);
+    //for interaction with local lmstudio model, needs work
+    async callLmstudioAgent(userInput) {
+        console.log(`🚀 Calling LM Studio (Model: ${this.agentModel})...`);
     
         this.messages.push({ role: "user", content: userInput });
     
-        const toolDescriptions = tools.map(t => `- ${t.function.name}: ${t.function.description}`).join("\n");
+        const toolDescriptions = this.tools.map(t => `- ${t.function.name}: ${t.function.description}`).join("\n");
     
-        // lmstudio agent is given system prompt in the lmstudio UI
+        // Create a simplified system prompt that's more forgiving
+        const systemPrompt = `You are an AI assistant that processes emails. Available functions:
+        - getEmails(): Fetches unread emails
+        - processEmail(email): Summarizes and classifies an email
+        - markAsRead(emailUID): Marks an email as read
+        - showUser(data): Displays results to the user
+        
+        When asked to process emails, first get the emails, then process each one, mark them as read, and show results to the user.`;
+        
         const requestBody = {
             model: this.agentModel,
-            prompt: userInput,
-            max_tokens: 500 
+            prompt: `${systemPrompt}\n\n${userInput}`,
+            max_tokens: 500,
+            temperature: 0.3  // Lower temperature for more consistent outputs
         };
     
         try {
@@ -101,17 +110,20 @@ class LlmApiWrapper {
     
             const aiResponse = data.choices[0].text.trim();
             
-            // Enhanced JSON parsing with better error handling
+            // Enhanced response processing with multiple fallback mechanisms
             let toolCalls = [];
+            
+            // Attempt 1: Try to parse the entire response as JSON
             try {
-                // First try to parse the entire response as JSON
                 const parsedResponse = JSON.parse(aiResponse);
                 if (parsedResponse.function && parsedResponse.arguments) {
                     toolCalls.push({ function: parsedResponse });
+                    console.log("Successfully parsed complete JSON response");
                 }
             } catch (error) {
-                // If that fails, try to extract JSON from the response
-                console.log("Initial JSON parsing failed, attempting to extract JSON from response");
+                console.log("Response is not a complete JSON object, trying alternative parsing methods");
+                
+                // Attempt 2: Try to extract JSON from the response
                 try {
                     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
@@ -119,10 +131,85 @@ class LlmApiWrapper {
                         const parsedJson = JSON.parse(jsonStr);
                         if (parsedJson.function && parsedJson.arguments) {
                             toolCalls.push({ function: parsedJson });
+                            console.log("Successfully extracted JSON from response");
                         }
                     }
                 } catch (extractError) {
-                    console.error("Error extracting JSON from AI response:", extractError);
+                    console.log("Could not extract valid JSON, trying natural language parsing");
+                }
+                
+                // Attempt 3: Natural language parsing for common patterns
+                if (toolCalls.length === 0) {
+                    // Check for getEmails intent
+                    if (aiResponse.toLowerCase().includes("get emails") || 
+                        aiResponse.toLowerCase().includes("fetch emails") ||
+                        aiResponse.toLowerCase().includes("retrieve emails") ||
+                        aiResponse.toLowerCase().includes("check emails")) {
+                        toolCalls.push({ 
+                            function: {
+                                name: "getEmails",
+                                arguments: {}
+                            }
+                        });
+                        console.log("Detected getEmails intent from natural language");
+                    }
+                    // Check for processEmail intent
+                    else if (aiResponse.toLowerCase().includes("process email") || 
+                             aiResponse.toLowerCase().includes("summarize email") ||
+                             aiResponse.toLowerCase().includes("classify email")) {
+                        // This is a simplified version - in a real implementation, you'd
+                        // need to extract the email details from the response
+                        toolCalls.push({ 
+                            function: {
+                                name: "processEmail",
+                                arguments: {
+                                    email: {
+                                        subject: "Extracted from response",
+                                        body: "Extracted from response"
+                                    }
+                                }
+                            }
+                        });
+                        console.log("Detected processEmail intent from natural language");
+                    }
+                    // Check for markAsRead intent
+                    else if (aiResponse.toLowerCase().includes("mark as read") || 
+                             aiResponse.toLowerCase().includes("mark email as read")) {
+                        toolCalls.push({ 
+                            function: {
+                                name: "markAsRead",
+                                arguments: {
+                                    emailUID: "latest" // Simplified - would need to extract the actual UID
+                                }
+                            }
+                        });
+                        console.log("Detected markAsRead intent from natural language");
+                    }
+                    // Check for showUser intent
+                    else if (aiResponse.toLowerCase().includes("show user") || 
+                             aiResponse.toLowerCase().includes("display results") ||
+                             aiResponse.toLowerCase().includes("show results")) {
+                        toolCalls.push({ 
+                            function: {
+                                name: "showUser",
+                                arguments: {
+                                    emails: [] // Simplified - would need to extract the actual emails
+                                }
+                            }
+                        });
+                        console.log("Detected showUser intent from natural language");
+                    }
+                    // Default fallback for initial prompt
+                    else if (userInput.toLowerCase().includes("process emails") ||
+                             userInput.toLowerCase().includes("get my emails")) {
+                        toolCalls.push({ 
+                            function: {
+                                name: "getEmails",
+                                arguments: {}
+                            }
+                        });
+                        console.log("Using default fallback to getEmails based on user input");
+                    }
                 }
             }
     
@@ -136,25 +223,28 @@ class LlmApiWrapper {
     }
     
     async callOpenAIAgent(userInput) {
-        console.log(`Calling OpenAI Agent (Model: ${this.model})...`);
-
-        this.messages.push({ role: "user", content: userInput });
-
+        console.log(`Calling OpenAI Agent (Model: ${this.OPEN_AI_MODEL})...`);
+    
+        this.messages.push({
+            role: "user",
+            content: userInput,
+        });
+    
         try {
-            const response = await this.agent.run({ messages: this.messages });
-
-            const finalMessage = response.choices?.[0]?.message;
-            this.messages.push({ role: "assistant", ...finalMessage });
-
-            return {
-                aiResponse: finalMessage.content || "No content returned.",
-                toolCalls: finalMessage.tool_calls || []
-            };
+            const response = await this.openai.chat.completions.create({
+                model: process.env.OPEN_AI_MODEL,
+                messages: this.messages,
+                tools: this.tools,
+                tool_choice: "auto"
+            });
+    
+            return response;
         } catch (error) {
             console.error("Error calling OpenAI Agent:", error);
-            return { aiResponse: "Error processing agent.", toolCalls: [] };
+            return { choices: [("failed", "failed")] };
         }
     }
+    
 }
 
 module.exports = LlmApiWrapper;

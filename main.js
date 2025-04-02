@@ -1,403 +1,419 @@
-const { app, BrowserWindow, ipcMain } = require('electron/main')
-const Imap = require('imap-simple');
-const fs = require('fs');
+import dotenv from 'dotenv';
+dotenv.config();
+import { app, BrowserWindow, ipcMain } from 'electron';
+import { fetchEmails, classifyMessage, summarizeMessage, markAsRead } from './tools.js';
+import { DynamicStructuredTool  } from "langchain/tools"
+import { z } from "zod";
 
-const LlmApiWrapper = require("./LlmApiWrapper.js");
+const storedEmails = new Map(); // key: UID, value: email object
+const chatHistory = []
 
-const startPrompt = "Please get my unread emails and process them."
-
-let categories = [];
-try {
-  const categoryData = fs.readFileSync('categories.json');
-  categories = JSON.parse(categoryData).categories;
-  console.log("Loaded categories:", categories);
-} catch (error) {
-  console.error("Error loading categories:", error);
-}
-
-require('dotenv').config();
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-const createWindow = () => {
-  const win = new BrowserWindow({
-      width: 800,
-      height: 600,
-      webPreferences: {
-          nodeIntegration: true, //need to swap to payload for production
-          contextIsolation: false,
-          enableRemoteModule: true,
-      },
+function createWindow() {
+  const mainWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      nodeIntegration: true, // For quick development; consider using preload for production
+      contextIsolation: false,
+      // preload: path.join(__dirname, 'preload.js'), // Uncomment if using a preload script
+    },
   });
 
-  win.loadFile('index.html')
-};
+  mainWindow.loadFile('index.html');
+}
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
 
-  console.log("Fetching emails on startup...");
+  // Initial fetch + show emails
+  const raw = await fetchEmails();
+  
+  if (raw && Array.isArray(raw.emails)) {
+    const emails = raw.emails;
 
-  if (process.env.LMSTUDIO_AGENT){
-    console.log("Using LM Studio agent...")
-    agent(startPrompt)
-  } else { //open ai agent
-    console.log("Using open ai agent...")
-    llm.callOpenAIAgent(startPrompt)
+    emails.forEach(email => {
+      storedEmails.set(email.uid, {
+        uid: email.uid,
+        subject: email.subject || "(No subject)",
+        sender: email.sender || "Unknown",
+        body: email.body || "",
+        isRead: false,
+        isProcessed: false,
+        summary: null,
+        classification: {
+          priority: "unknown",
+          category: "uncategorized",
+        },
+        status: "fetched",
+      });
+
+      showUser(storedEmails.get(email.uid));
+    });
   }
 
-  // setInterval(() => {
-  //     console.log("Checking for new emails...");
-  //     llm.callOpenAIAgent("Check for new emails and process them for me.")
-  // }, 5 * 60 * 1000);
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 });
 
+// Quit the app when all windows are closed (except on macOS)
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-async function getEmails() {
-  console.log("Fetching unread emails...");
-
-  const config = {
-      imap: {
-          user: process.env.EMAIL_USER,
-          password: process.env.EMAIL_PASS,
-          host: 'imap.gmail.com',
-          port: 993,
-          tls: true,
-          authTimeout: 3000,
-          tlsOptions: {
-              rejectUnauthorized: false,
-          }
-      }
-  };
-
-  try {
-      const connection = await Imap.connect(config);
-      await connection.openBox('INBOX');
-
-      const searchCriteria = ['UNSEEN'];
-      const fetchOptions = { bodies: ['HEADER.FIELDS (SUBJECT)', 'TEXT'], struct: true };
-
-      const messages = await connection.search(searchCriteria, fetchOptions);
-      const emails = messages.map(msg => ({
-          uid: msg.attributes.uid,
-          subject: cleanText(msg.parts.find(part => part.which === 'HEADER.FIELDS (SUBJECT)').body.subject[0]),
-          body: cleanEmailBody(msg.parts.find(part => part.which === 'TEXT').body),
-      }));
-
-      connection.end();
-      console.log(`✅ Retrieved ${emails.length} unread emails.`);
-
-      // 🔹 Return emails in a structured way so OpenAI knows it should process each one
-      return {
-          count: emails.length,
-          emails: emails.map(email => ({
-              subject: email.subject,
-              body: email.body,
-              uid: email.uid
-          })),
-      };
-  } catch (error) {
-      console.error("Error fetching emails:", error);
-      return { count: 0, emails: [] };
-  }
-}
-
-function cleanText(text) {
-  if (!text) return "";
-  return text.replace(/\s+/g, " ").trim(); // ✅ Remove extra spaces
-}
-
-function cleanEmailBody(emailBody) {
-  if (!emailBody) return "";
-
-  emailBody = emailBody.replace(/<\/?[^>]+(>|$)/g, "");
-
-  emailBody = emailBody.split("-- ").shift();
-  emailBody = emailBody.split("Sent from my").shift();
-
-  const replyMarkers = ["On ", "wrote:", "From:", "Subject:"];
-  replyMarkers.forEach(marker => {
-      const index = emailBody.indexOf(marker);
-      if (index > 0) emailBody = emailBody.substring(0, index);
-  });
-
-  if (emailBody.length > 1000) {
-      emailBody = emailBody.substring(0, 1000) + "...";
-  }
-
-  return emailBody.trim();
-}
-
-async function summarizeMessage(messageBody) {
-  console.log("Summarizing message...");
-  return await llm.callLLM("Summarize the following message in a few sentences." + messageBody, tools);
-}
-
-async function classifyMessage(messageBody) {
-  console.log("📌 Classifying email...");
-
-  const categoriesList = categories.join('", "');
-
-  const systemPrompt = `
-      You are an AI assistant that classifies emails. 
-      Classify the email into:
-      - **Priority**: "important" or "not important".
-      - **Category**: one of the following: "${categoriesList}".
-
-      Return your response as a JSON object like this:
-      {
-          "priority": "important",
-          "category": "work"
-      }
-  `;
-
-  return await llm.callLLM(systemPrompt + messageBody, tools);
-}
-
-async function processEmail(email) {
-  console.log(`📩 Processing email: "${email.subject}"`);
-
-  const truncatedEmail = email.body.length > 1000 ? email.body.slice(0, 1000) + "..." : email.body;
-
-  const summary = await summarizeMessage(truncatedEmail);
-  
-  const classification = await classifyMessage(truncatedEmail);
-
-  console.log(`Summary: ${summary}`);
-  console.log(`Classification: ${JSON.stringify(classification)}`);
-
-  return {
-      subject: email.subject,
-      summary,
-      classification
-  };
-}
-
-async function markAsRead(emailUID) {
-  console.log(`Attempting to mark email ${emailUID} as read...`);
-
-  if (!emailUID) {
-      console.error("Error: No UID provided for marking as read.");
-      return;
-  }
-
-  const config = {
-      imap: {
-          user: process.env.EMAIL_USER,
-          password: process.env.EMAIL_PASS,
-          host: 'imap.gmail.com',
-          port: 993,
-          tls: true,
-          authTimeout: 3000,
-          tlsOptions: {
-              rejectUnauthorized: false,
-          },
-      },
-  };
-
-  try {
-      const connection = await Imap.connect(config);
-      await connection.openBox('INBOX');
-
-      console.log(`Checking if email with UID ${emailUID} exists...`);
-      const searchCriteria = [emailUID];
-      const fetchOptions = { bodies: [] };
-      const messages = await connection.search(searchCriteria, fetchOptions);
-
-      if (messages.length === 0) {
-          console.error(`❌ No matching email found for UID: ${emailUID}`);
-          connection.end();
-          return;
-      }
-
-      console.log(`Email found. Adding "\\Seen" flag to mark as read...`);
-      await connection.addFlags(emailUID, ['\\Seen']);
-
-      console.log(`Successfully marked email ${emailUID} as read.`);
-      connection.end();
-  } catch (error) {
-      console.error("Error marking email as read:", error);
-  }
-}
-
+    if (process.platform !== 'darwin') {
+    app.quit();
+    }
+});
 
 function showUser(data) {
-  console.log("Sending data to renderer:", data);
-  BrowserWindow.getAllWindows().forEach(win => {
-      win.webContents.send('showUser', data);
-  });
+    console.log("Sending data to renderer.");
+    BrowserWindow.getAllWindows().forEach(win => {
+        win.webContents.send('showUser', data);
+    });
 }
 
-const tools = [
-  {
-    type: "function",
-    function: {
-      name: "getEmails",
-      description: "Fetch unread emails.",
-      parameters: {
-        type: "object",
-        properties: {},
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-        name: "processEmail",
-        description: "Summarize and classify a specific email. If there are multiple emails, call this function multiple times - once per email.",
-        parameters: {
-            type: "object",
-            properties: {
-                email: {
-                    type: "object",
-                    properties: {
-                        subject: { type: "string" },
-                        body: { type: "string" }
-                    },
-                    required: ["subject", "body"]
-                }
-            },
-            required: ["email"],
-        },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "markAsRead",
-      description: "Marks an email as read. If there are multiple emails, call this function multiple times - once per email.",
-      parameters: {
-        type: "object",
-        properties: {
-          emailUID: {
-            type: "string",
-          },
-        },
-        required: ["emailUID"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-        name: "showUser",
-        description: "Send processed email summaries and classifications to the user for display in the UI. Use after processing an email.",
-        parameters: {
-            type: "object",
-            properties: {
-                emails: {
-                    type: "array",
-                    items: {
-                        type: "object",
-                        properties: {
-                            subject: { type: "string" },
-                            summary: { type: "string" },
-                            classification: {
-                                type: "object",
-                                properties: {
-                                    priority: { type: "string" },
-                                    category: { type: "string" }
-                                },
-                                required: ["priority", "category"]
-                            }
-                        },
-                        required: ["subject", "summary", "classification"]
-                    }
-                }
-            },
-            required: ["emails"],
-        },
+const fetchEmailsTool = new DynamicStructuredTool({
+  name: "fetchEmails",
+  description: "Fetch new emails and store them in memory.",
+  schema: z.object({}),
+  func: async () => {
+    console.log("📥 Fetching raw unread emails...");
+
+    const raw = await fetchEmails();
+
+    if (!raw || !Array.isArray(raw.emails)) {
+      console.error("❌ raw.emails is not an array. Type:", typeof raw.emails);
+      return "Failed to fetch emails.";
     }
-  }
-];
 
-const availableTools = [
-  showUser,
-  markAsRead,
-  getEmails,
-  processEmail
-]
+    const emails = raw.emails;
+    console.log("📨 Fetched:", emails.length, "emails.");
 
-const llm = new LlmApiWrapper(tools);
+    if (emails.length === 0) return "No unread emails.";
 
-async function agent(userInput) {
-  for (let i = 0; i < process.env.MAX_ITERATIONS; i++) {
-      console.log(`AI Processing Step ${i + 1}...`);
+    emails.forEach(email => {
+      storedEmails.set(email.uid, {
+        uid: email.uid,
+        subject: email.subject || "(No subject)",
+        sender: email.sender || "Unknown",
+        body: email.body || "",
+        isRead: false,
+        isProcessed: false,
+        summary: null,
+        classification: {
+          priority: "unknown",
+          category: "uncategorized"
+        },
+        status: "fetched"
+      });
+      
+      showUser(email);
+    });
 
-      const { aiResponse, toolCalls } = await llm.callLmstudioAgent(userInput, tools);
+    return [...storedEmails.values()].slice(0, 10); // return latest emails for display
+  },
+});
 
-      console.log("AI Response:", aiResponse);
+const markAsReadTool = new DynamicStructuredTool({
+  name: "markAsRead",
+  description: "Mark an email as read by UID.",
+  schema: z.object({ uid: z.number() }),
+  func: async ({ uid }) => {
+    console.log("Marking as read...")
+    const email = storedEmails.get(uid);
+    if (!email) return { error: "Email not found." };
 
-      let newUserInput = aiResponse;
-      let processedEmails = [];
+    try {
+      const success = await markAsRead(uid);
 
-      if (toolCalls.length > 0) {
-          for (const toolCall of toolCalls) {
-              const functionName = toolCall.function.name;
-              const functionArgs = toolCall.function.arguments || {};
-              const functionArgsArr = Object.values(functionArgs);
-
-              console.log(`Calling function: ${functionName}`);
-              const functionToCall = availableTools.find(tool => tool.name === functionName)
-
-              if (!functionToCall) {
-                  console.error(`Function "${functionName}" not found.`);
-                  return `Error: Function "${functionName}" not found.`;
-              }
-
-              try {
-                  const functionResponse = await functionToCall.apply(null, functionArgsArr);
-                  console.log(`Function ${functionName} executed successfully!`);
-                  console.log("Function response:", functionResponse);
-
-                  if (functionName === "processEmail") {
-                      processedEmails.push(functionResponse);
-                  }
-
-                  llm.addMessage({
-                      role: "function",
-                      name: functionName,
-                      content: JSON.stringify(functionResponse),
-                  });
-
-                  newUserInput += "\nFunction ${functionName} returned: ${JSON.stringify(functionResponse)}";
-
-              } catch (error) {
-                  console.error(`Error executing function "${functionName}":`, error);
-                  return `Error executing function "${functionName}".`;
-              }
-          }
-
-          if (processedEmails.length > 0) {
-              console.log("Sending processed emails to UI...");
-              showUser({ emails: processedEmails });
-          }
+      if (!success) {
+        console.warn(`Could not mark email ${uid} as read.`);
+        return { message: `Failed to mark email ${uid} as read.` };
       }
 
-      if (toolCalls.length === 0) {
-          console.log("AI completed reasoning.");
-          llm.addMessage({ role: "assistant", content: aiResponse });
-          return aiResponse;
-      }
+      const updated = { ...email, isRead: true, status: "read" };
+      storedEmails.set(uid, updated);
 
-      userInputclsd = newUserInput
+      showUser(updated);
+      return { message: `Email ${uid} marked as read.`, subject: email.subject };
+    } catch (err) {
+      console.error("Error marking as read:", err);
+      return { error: "Unexpected error while marking email as read." };
+    }
+  },
+});
+
+const getStoredEmailsTool = new DynamicStructuredTool({
+  name: "getStoredEmails",
+  description: "Access previously fetched emails when needing to perform tasks on an emails",
+  schema: z.object({}),
+  func: async () => {
+    console.log("Getting stored emails...")
+    return JSON.stringify([...storedEmails.values()].slice(0, 10)); // limit for LLM
+  },
+});
+
+const getEmailByIdTool = new DynamicStructuredTool({
+  name: "getEmailById",
+  description: "Retrieve a single stored email by UID.",
+  schema: z.object({
+    uid: z.number().describe("The UID of the email you want to retrieve."),
+  }),
+  func: async ({ uid }) => {
+    console.log("Getting email by id...")
+
+    const email = storedEmails.get(uid);
+
+    if (!email) {
+      return `No email found with UID ${uid}.`;
+    }
+
+    return email;
+  },
+});
+
+const getEmailBySubjectTool = new DynamicStructuredTool({
+  name: "getEmailBySubject",
+  description: "Retrieve the first stored email that matches the given subject keyword.",
+  schema: z.object({
+    keyword: z.string().describe("A keyword or phrase from the email subject."),
+  }),
+  func: async ({ keyword }) => {
+    console.log("Getting email by subject...")
+    const match = [...storedEmails.values()].find(email =>
+      email.subject.toLowerCase().includes(keyword.toLowerCase())
+    );
+
+    return {
+      uid: match.uid,
+      subject: match.subject,
+      from: match.sender,
+      preview: match.body?.slice(0, 200),
+    };    
+  },
+});
+
+const getEmailsByCategoryTool = new DynamicStructuredTool({
+  name: "getEmailsByCategory",
+  description: "Retrieve all stored emails that match the given category.",
+  schema: z.object({
+    category: z.string().describe("The category to filter emails by."),
+  }),
+  func: async ({ category }) => {
+    console.log("Getting email by category...")
+    const matches = [...storedEmails.values()].filter(
+      email =>
+        email.classification &&
+        email.classification.category &&
+        email.classification.category.toLowerCase() === category.toLowerCase()
+    );
+
+    return matches.slice(0, 10).map(email => ({
+      uid: email.uid,
+      subject: email.subject,
+      classification: email.classification,
+      preview: email.body?.slice(0, 200),
+    }));    
+  },
+});
+
+const processEmailTool = new DynamicStructuredTool({
+  name: "processEmail",
+  description: "Summarize and classify a single email by UID.",
+  schema: z.object({
+    uid: z.number().describe("The UID of the email to process."),
+  }),
+  func: async ({ uid }) => {
+    const email = storedEmails.get(uid);
+    if (!email) {
+      return { error: "Email not found." };
+    }
+
+    const truncatedBody = email.body?.slice(0, 1000) || "";
+
+    const summary = await summarizeEmail(truncatedBody);
+    const classification = await classifyMessage(truncatedBody);
+
+    // Update storedEmails map
+    const updatedEmail = {
+      ...email,
+      summary,
+      classification,
+      isProcessed: true,
+      status: "processed",
+    };
+
+    storedEmails.set(uid, updatedEmail);
+
+    showUser(updatedEmail)
+
+    return {
+      uid,
+      subject: email.subject,
+      summary,
+      classification,
+      status: "processed",
+    };
+  },
+});
+
+const summarizeEmailTool = new DynamicStructuredTool({
+  name: "summarizeMessage",
+  description: "Use this to actually summarize an email. Do NOT assume a summary without calling this.",
+  schema: z.object({ uid: z.number() }),
+  func: async ({ uid }) => {
+    const email = storedEmails.get(uid);
+    if (!email) return { error: "Email not found." };
+
+    const summary = await summarizeMessage(email.body.slice(0, 1000));
+
+    const updated = {
+      ...email,
+      summary,
+      isProcessed: true,
+      status: email.status === "read" ? "read_processed" : "processed",
+    };
+
+    storedEmails.set(uid, updated);
+
+    showUser(updated)
+
+    return { uid, subject: email.subject, summary };
+  },
+});
+
+const classifyEmailTool = new DynamicStructuredTool({
+  name: "classifyEmail",
+  description: "This classifies the email's priority and category. You MUST use this tool to classify, not guess.",
+  schema: z.object({ uid: z.number() }),
+  func: async ({ uid }) => {
+    const email = storedEmails.get(uid);
+    if (!email) return { error: "Email not found." };
+
+    const classification = await classifyEmail(email.body.slice(0, 1000));
+
+    const updated = {
+      ...email,
+      classification,
+      isProcessed: true,
+      status: email.status === "read" ? "read_processed" : "processed"
+    };
+
+    storedEmails.set(uid, updated);
+
+    showUser(updated)
+
+    return {
+      uid,
+      subject: email.subject,
+      classification
+    };
   }
+});
 
-  console.log("Max iterations reached. Stopping agent.");
-  return "Agent stopped due to max iterations.";
-}
+const getEmailsByStatusTool = new DynamicStructuredTool({
+  name: "getEmailsByStatus",
+  description: "Retrieve stored emails by their current status.",
+  schema: z.object({ status: z.string() }),
+  func: async ({ status }) => {
+    console.log("Getting email by status...")
+    return [...storedEmails.values()].filter(email => email.status === status);
+  },
+});
+
+const classifyAllStoredEmailsTool = new DynamicStructuredTool({
+  name: "classifyAllStoredEmails",
+  description: "Classify all currently stored emails that are not already classified.",
+  schema: z.object({}),
+  func: async () => {
+    const results = [];
+    console.log("Classifying ALL emails...")
+    for (const email of storedEmails.values()) {
+      if (
+        email.classification.category === "uncategorized" ||
+        email.classification.priority === "unknown"
+      ) {
+        const classification = await classifyMessage(email.body.slice(0, 1000));
+        const updated = { ...email, classification, isProcessed: true };
+        storedEmails.set(email.uid, updated);
+        showUser(updated);
+        results.push({
+          uid: email.uid,
+          subject: email.subject,
+          classification
+        });
+      }
+    }
+
+    return results;
+  }
+});
+
+const tools = [classifyAllStoredEmailsTool, processEmailTool, getEmailsByStatusTool, summarizeEmailTool, classifyEmailTool, processEmailTool, fetchEmailsTool, markAsReadTool, getStoredEmailsTool, getEmailByIdTool, getEmailsByCategoryTool, getEmailBySubjectTool];
+
+import { ChatOpenAI } from "@langchain/openai";
+import { AgentExecutor, createOpenAIToolsAgent } from "langchain/agents";
+import { TavilySearchResults } from "@langchain/community/tools/tavily_search";
+import { pull } from "langchain/hub";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { SystemMessagePromptTemplate } from "@langchain/core/prompts";
+
+const model = new ChatOpenAI({
+  temperature: 0,
+  modelName: process.env.OPENAI_MODEL,
+});
+
+const basePrompt = await pull("hwchase17/openai-tools-agent");
+const prompt = ChatPromptTemplate.fromMessages([
+  SystemMessagePromptTemplate.fromTemplate(`You are an AI email assistant.
+
+Before summarizing, classifying, or marking an email as read, ALWAYS:
+1. Use "getStoredEmails" to see what emails are in memory.
+2. Use "classifyAllStoredEmails" to classify all emails if classification is needed.
+3. Use "summarizeMessage" or "classifyEmail" to operate on a specific email.
+4. DO NOT guess. Always use tools to get information or take action.
+  `),
+  ...basePrompt.promptMessages,
+]);
+
+const agent = await createOpenAIToolsAgent({
+  llm: model,
+  tools,
+  prompt,
+});
+
+const executor = new AgentExecutor({
+  agent,
+  tools,
+  verbose: false,
+});
 
 ipcMain.handle('submitPrompt', async (event, userInput) => {
   console.log("🔍 AI Agent processing prompt...");
 
-  if (process.env.LMSTUDIO_AGENT){
-    const result = agent(userInput)
-  } else { //open ai agent
-    const result = llm.callOpenAIAgent(userInput)
+  // Log chat history before adding the new user input
+  console.log("Current chat history:", chatHistory);
+
+  // Ensure the user input is added as a string
+  chatHistory.push({ role: "user", content: userInput });
+
+  // Ensure assistant's output is a string
+  const result = await executor.invoke({
+    input: userInput,
+    chat_history: chatHistory,
+  });
+
+  // Make sure assistant's output is a string
+  if (typeof result.output !== 'string') {
+    console.warn("Warning: Assistant output is not a string:", result.output);
   }
+
+  chatHistory.push({ role: "assistant", content: result.output });
+
+  console.log("Finished processing.");
+  console.log(result);
+
+  // Log the updated chat history
+  console.log("Updated chat history:", chatHistory);
+
   return result;
 });
+

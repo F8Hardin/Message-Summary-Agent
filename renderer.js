@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const categoryTabsContainer = document.getElementById("categoryTabs");
 
     if (!inputField || !submitButton || !displayArea || !categoryTabsContainer) {
-        console.error("Error: Missing UI elements.");
+        console.error("Error: Missing UI elements.");s
         return;
     }
 
@@ -19,6 +19,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const response = await fetch('categories.json');
         const categoryData = await response.json();
         const categories = categoryData.categories;
+
+        console.log(categories)
 
         categories.forEach(category => {
             const tabElement = document.createElement("span");
@@ -30,11 +32,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         setupCategoryEventListeners();
     } catch (error) {
-        console.error("❌ Error loading categories:", error);
+        console.error("Error loading categories:", error);
     }
 
     submitButton.addEventListener("click", async () => {
         const userInput = inputField.value.trim();
+        inputField.value = '';
         
         if (userInput === "") {
             console.warn("Empty input ignored.");
@@ -46,36 +49,48 @@ document.addEventListener("DOMContentLoaded", async () => {
         try {
             await ipcRenderer.invoke("submitPrompt", userInput);
         } catch (error) {
-            console.error("❌ Error processing prompt:", error);
+            console.error("Error processing prompt:", error);
         }
     });
 
     ipcRenderer.on('showUser', (event, data) => {
         console.log("Received email data from AI:", data);
-        
-        data.emails.forEach(email => {
-            allEmails.push(email);
-
-            const emailElement = document.createElement("div");
-            emailElement.classList.add("email-entry");
-            emailElement.setAttribute("data-category", email.classification.category);
-            emailElement.innerHTML = `
-                <h3>${email.subject}</h3>
-                <p><strong>Summary:</strong> ${email.summary}</p>
-                <p><strong>Priority:</strong> ${email.classification.priority}</p>
-                <p><strong>Category:</strong> ${email.classification.category}</p>
-                <div class="thumb-buttons">
-                    <button class="thumb-up" data-subject="${email.subject}">👍</button>
-                    <button class="thumb-down" data-subject="${email.subject}">👎</button>
-                </div>
-                <hr>
-            `;
-            displayArea.appendChild(emailElement);
-        });
-
+    
+        const email = data;
+    
+        // Remove existing entry by UID to avoid duplicates
+        const existing = document.querySelector(`.email-entry[data-uid="${email.uid}"]`);
+        if (existing) {
+            existing.remove();
+        }
+    
+        const emailElement = document.createElement("div");
+        emailElement.setAttribute("data-uid", email.uid);
+        emailElement.classList.add("email-entry");
+        emailElement.setAttribute("data-category", email.classification?.category || "uncategorized");
+    
+        emailElement.innerHTML = `
+            <h3>${email.subject}</h3>
+            <p><strong>UID:</strong> ${email.uid}</p>
+            <p><strong>Sender:</strong> ${email.sender || "Unknown"}</p>
+            <p><strong>Read:</strong> ${email.isRead ? "✅ Read" : "📩 Unread"}</p>
+            <p><strong>Status:</strong> ${email.status}</p>
+            <p><strong>Processed:</strong> ${email.isProcessed ? "✔️ Yes" : "❌ No"}</p>
+            <p><strong>Summary:</strong> ${email.summary || "(Not summarized)"}</p>
+            <p><strong>Priority:</strong> ${email.classification?.priority || "unknown"}</p>
+            <p><strong>Category:</strong> ${email.classification?.category || "uncategorized"}</p>
+    
+            <div class="thumb-buttons">
+                <button class="thumb-up" data-subject="${email.subject}">👍</button>
+                <button class="thumb-down" data-subject="${email.subject}">👎</button>
+            </div>
+            <hr>
+        `;
+    
+        displayArea.appendChild(emailElement);
         updateCategoryFilter();
     });
-
+    
     function setupCategoryEventListeners() {
         const categoryTabs = document.querySelectorAll(".category-tab");
         categoryTabs.forEach(tab => {

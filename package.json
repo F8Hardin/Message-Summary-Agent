@@ -1,0 +1,26 @@
+{
+  "dependencies": {
+    "@langchain/community": "^0.3.36",
+    "@langchain/openai": "^0.4.7",
+    "decode": "^0.3.0",
+    "dotenv": "^16.4.7",
+    "electron": "^35.0.3",
+    "fs": "^0.0.1-security",
+    "imap-simple": "^5.1.0",
+    "langchain": "^0.3.19",
+    "openai": "^4.89.0",
+    "quoted-printable": "^1.0.1",
+    "zod": "^3.24.2"
+  },
+  "name": "langchainemailagent",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "type": "module"
+}
