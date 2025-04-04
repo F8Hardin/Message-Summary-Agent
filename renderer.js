@@ -3,9 +3,9 @@ const { ipcRenderer } = require('electron');
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("✅ DOM fully loaded!");
 
-    const inputField = document.getElementById("promptInput");
+    const inputField = document.getElementById("chatInput");
     const submitButton = document.getElementById("submitPrompt");
-    const displayArea = document.getElementById("emailDisplay");
+    const displayArea = document.getElementById("emailList");
     const categoryTabsContainer = document.getElementById("categoryTabs");
 
     if (!inputField || !submitButton || !displayArea || !categoryTabsContainer) {
@@ -13,8 +13,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
     }
 
-    let allEmails = [];
-
+    //loading categories
     try {
         const response = await fetch('categories.json');
         const categoryData = await response.json();
@@ -22,10 +21,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         console.log(categories)
 
+        widthPercent = 100 / (categories.length) //plus 1 for "all"
+
         categories.forEach(category => {
             const tabElement = document.createElement("span");
             tabElement.classList.add("category-tab");
             tabElement.setAttribute("data-category", category);
+            tabElement.style.width = widthPercent + "%";
             tabElement.textContent = category.charAt(0).toUpperCase() + category.slice(1);
             categoryTabsContainer.appendChild(tabElement);
         });
@@ -46,10 +48,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         console.log("Submitting prompt:", userInput);
 
+        submitButton.disabled = true
+
         try {
             await ipcRenderer.invoke("submitPrompt", userInput);
+            submitButton.disabled = false
         } catch (error) {
             console.error("Error processing prompt:", error);
+            submitButton.disabled = false
         }
     });
 
