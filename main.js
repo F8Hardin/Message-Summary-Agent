@@ -4,8 +4,8 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: 1920,
+    height: 1080,
     webPreferences: {
       nodeIntegration: true, // For quick development, use preload for prod
       contextIsolation: false,
@@ -38,7 +38,7 @@ app.whenReady().then(async () => {
     //show emails
     if (Array.isArray(emails)) {
       emails.forEach(email => {
-        showUser(email);
+        showEmail(email);
       });
     } else {
       console.warn("Unexpected response from getStoredEmails:", emails);
@@ -60,11 +60,18 @@ app.on('window-all-closed', () => {
     }
 });
 
-function showUser(data) {
-    console.log("Sending data to renderer.");
+function showEmail(data) {
+    console.log("Sending email data to renderer.");
     BrowserWindow.getAllWindows().forEach(win => {
-        win.webContents.send('showUser', data);
+        win.webContents.send('showEmail', data);
     });
+}
+
+function showChat(data) {
+  console.log("Sending chat data to renderer.");
+  BrowserWindow.getAllWindows().forEach(win => {
+      win.webContents.send('showChat', data);
+  });
 }
 
 ipcMain.handle('submitPrompt', async (event, userInput) => {
@@ -84,13 +91,14 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
     console.log("Updated UID Keys:", updatedUIDKeys);
 
     //Display the LLM's readable response (not yet implemented on UI) - result.agent_message.content
+    showChat({role: "Agent", message: result.agent_message.content})
 
     //iterate and show updated emails
     for (let i = 0; i < updatedUIDKeys.length; i++) {
       const key = updatedUIDKeys[i];
       const value = result.updated_UIDs[key];
       //console.log("Key:", key, "Value:", value);
-      showUser(value)
+      showEmail(value)
     }
 
 
