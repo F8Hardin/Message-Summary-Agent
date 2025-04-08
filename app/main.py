@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from app.tools import fetch_emails, get_stored_emails, updated_UIDs
+from app.tools import fetch_emails, get_stored_emails, updated_UIDs, remove_email, cleared_UIDs
 from app.agent import build_agent
 
 #run with uvicorn app.main:app --reload --port 9119
@@ -40,11 +40,15 @@ async def prompt_agent(request: AgentPrompt):
 
         # print("Last updated:", lastUpdatedEmails)
         # print("Message from Agent:", state["messages"][-1])
-        updated = updated_UIDs.copy()
+        updated = updated_UIDs.copy() #tracking updated data
         updated_UIDs.clear()
+
+        cleared = cleared_UIDs.copy() #tracking deleted data
+        cleared_UIDs.clear()
         return {
             "agent_message": state["messages"][-1],
-            "updated_UIDs": updated
+            "updated_UIDs": updated,
+            "cleared_UIDs" : cleared
         }
 
     except Exception as e:
@@ -66,6 +70,10 @@ async def trigger_fetch_emails():
 @app.get("/getStoredEmails")
 async def trigger_get_stored_emails():
     return await get_stored_emails.ainvoke({})
+
+@app.get("/removeEmail")
+async def trigger_get_stored_emails(uid: int):
+    return await remove_email.ainvoke({})
 
 @app.get("/getEmailById")
 async def get_email_by_id(uid: int):

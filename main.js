@@ -6,6 +6,8 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1920,
     height: 1080,
+    minWidth: 1080,
+    minHeight: 720,
     webPreferences: {
       nodeIntegration: true, // For quick development, use preload for prod
       contextIsolation: false,
@@ -67,6 +69,13 @@ function showEmail(data) {
     });
 }
 
+function removeEmail(data) {
+  console.log("Removing email data from renderer.");
+  BrowserWindow.getAllWindows().forEach(win => {
+      win.webContents.send('removeEmail', data);
+  });
+}
+
 function showChat(data) {
   console.log("Sending chat data to renderer.");
   BrowserWindow.getAllWindows().forEach(win => {
@@ -89,6 +98,8 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
     console.log("UIDs:", result.updated_UIDs)
     const updatedUIDKeys = Object.keys(result.updated_UIDs);
     console.log("Updated UID Keys:", updatedUIDKeys);
+    const clearedUIDKeys = result.cleared_UIDs
+    console.log("Cleared UID keys:", clearedUIDKeys)
 
     //Display the LLM's readable response (not yet implemented on UI) - result.agent_message.content
     showChat({role: "Agent", message: result.agent_message.content})
@@ -101,6 +112,10 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
       showEmail(value)
     }
 
+    //iterate and remove cleared emails
+    for (let i = 0; i < clearedUIDKeys.length; i++){
+      removeEmail(clearedUIDKeys[i])
+    }
 
     return result.agent_message;
   } catch (err) {

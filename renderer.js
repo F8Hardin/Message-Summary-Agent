@@ -23,13 +23,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         console.log(categories)
 
-        widthPercent = 100 / (categories.length) //plus 1 for "all"
-
         categories.forEach(category => {
             const tabElement = document.createElement("span");
             tabElement.classList.add("category-tab");
             tabElement.setAttribute("data-category", category);
-            tabElement.style.width = widthPercent + "%";
             tabElement.textContent = category.charAt(0).toUpperCase() + category.slice(1);
             categoryTabsContainer.appendChild(tabElement);
         });
@@ -78,6 +75,11 @@ document.addEventListener("DOMContentLoaded", async () => {
             existing.querySelector("p:nth-of-type(4)").innerHTML = `<strong>Status:</strong> ${email.status}`;
             existing.querySelector("p:nth-of-type(5)").innerHTML = `<strong>Processed:</strong> ${email.isProcessed ? "Yes" : "No"}`;
             existing.querySelector("p:nth-of-type(6)").innerHTML = `<strong>Summary:</strong> ${email.summary || "(Not summarized)"}`;
+
+            existing.setAttribute("data-category", email.classification?.category?.toLowerCase() || "uncategorized");
+            existing.setAttribute("data-priority", email.classification?.priority?.toLowerCase() || "unknown");
+            existing.setAttribute("data-isRead", email.isRead ? "read" : "unread");
+
             existing.querySelector("p:nth-of-type(7)").innerHTML = `<strong>Priority:</strong> ${email.classification?.priority || "unknown"}`;
             existing.querySelector("p:nth-of-type(8)").innerHTML = `<strong>Category:</strong> ${email.classification?.category || "uncategorized"}`;
         } else {
@@ -85,6 +87,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             emailElement.setAttribute("data-uid", email.uid);
             emailElement.classList.add("email-entry");
             emailElement.setAttribute("data-category", email.classification?.category || "uncategorized");
+            emailElement.setAttribute("data-priority", email.classification?.priority || "unknown");
+            emailElement.setAttribute("data-isRead", email.isRead ? "read" : "unread");
         
             emailElement.innerHTML = `
                 <h3>${email.subject}</h3>
@@ -107,6 +111,12 @@ document.addEventListener("DOMContentLoaded", async () => {
             emailDisplayArea.prepend(emailElement);
         }
         updateCategoryFilter();
+    });
+
+    ipcRenderer.on('removeEmail', (event, data) => {
+        console.log("Removing assocaited email:", data);
+        const existing = document.querySelector(`.email-entry[data-uid="${data}"]`);
+        existing.remove()
     });
 
     ipcRenderer.on('showChat', (event, data) => {
@@ -146,7 +156,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const allEmailEntries = document.querySelectorAll(".email-entry");
 
         allEmailEntries.forEach(email => {
-            if (category === "all" || email.getAttribute("data-category") === category) {
+            if (category === "all" 
+            || email.getAttribute("data-category") === category 
+            || email.getAttribute("data-priority") === category
+            || email.getAttribute("data-isRead") === category) {
                 email.style.display = "block";
             } else {
                 email.style.display = "none";
