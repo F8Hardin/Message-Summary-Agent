@@ -157,7 +157,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             emailElement.addEventListener("click", () => {
                 currentDisplayedEmail?.classList.remove("selected");
-                emailToggleReadButton.innerText = email.isRead ? "Mark as Unread" : "Mark as Read";
+                const isRead = emailElement.getAttribute("data-isRead") === "read";
+                emailToggleReadButton.innerText = isRead ? "Mark as Unread" : "Mark as Read";                
                 showEmailDetail(email);
                 emailElement.classList.add("selected");
                 currentDisplayedEmail = emailElement
@@ -221,11 +222,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (overlay && iframe) {
             overlay.style.display = "flex";
             iframe.srcdoc = email.raw_body || "<p>No content</p>";
-            if (email.isRead) {
-                emailToggleReadButton.textContent = "Mark as Unread";
-            } else {
-                emailToggleReadButton.textContent = "Mark as Read";
-            }
         }
     }   
     
