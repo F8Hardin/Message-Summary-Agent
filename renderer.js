@@ -1,16 +1,22 @@
 const { ipcRenderer, ipcMain } = require('electron');
+const { read } = require('fs');
 
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("✅ DOM fully loaded!");
+
+    let currentDisplayedEmail = null;
 
     const inputField = document.getElementById("chatInput");
     const submitButton = document.getElementById("submitPrompt");
     const emailDisplayArea = document.getElementById("emailList");
     const chatDisplayArea = document.getElementById("chatWindow")
     const categoryTabsContainer = document.getElementById("categoryTabs");
-    const loadingWheel = document.getElementById("loader")
+    const loadingWheel = document.getElementById("submit_loader")
+    const processingElement = document.getElementById("processingMessage");
+    const emailCloseButton = document.getElementById("closeEmailDetail");
+    const emailToggleReadButton = document.getElementById("toggleReadEmailDetail")   
 
-    if (!inputField || !submitButton || !emailDisplayArea || !categoryTabsContainer || !chatDisplayArea || !loadingWheel) {
+    if (!inputField || !submitButton || !emailDisplayArea || !categoryTabsContainer || !chatDisplayArea || !loadingWheel || !processingElement) {
         console.error("Error: Missing UI elements.");s
         return;
     }
@@ -36,6 +42,54 @@ document.addEventListener("DOMContentLoaded", async () => {
         console.error("Error loading categories:", error);
     }
 
+    function updateEmailReadStatus(uid, isRead) {
+        if (!currentDisplayedEmail || currentDisplayedEmail.getAttribute("data-uid") !== uid) return;
+    
+        currentDisplayedEmail.setAttribute("data-isRead", isRead ? "read" : "unread");
+
+        emailToggleReadButton.innerText = isRead ? "Mark as Unread" : "Mark as Read";
+    
+        const readField = currentDisplayedEmail.querySelector("p:nth-of-type(3)");
+        if (readField) {
+            readField.innerHTML = `<strong>Read:</strong> ${isRead ? "Read" : "Unread"}`;
+        }
+    }
+
+    emailCloseButton.addEventListener("click", () => {
+        document.getElementById("emailDetailOverlay").style.display = "none";
+        currentDisplayedEmail?.classList.remove("selected");
+        currentDisplayedEmail = null;
+        chatDisplayArea.style.overflow = "hidden"
+    });
+
+    emailToggleReadButton.addEventListener("click", async () => {
+        let readStatus = currentDisplayedEmail.getAttribute("data-isRead");
+        let uid = currentDisplayedEmail.getAttribute("data-uid");
+    
+        let res = null;
+        let success = false;
+    
+        try {
+            if (readStatus === "unread") {
+                res = await ipcRenderer.invoke("markAsRead", uid);
+            } else {
+                res = await ipcRenderer.invoke("unmarkAsRead", uid);
+            }
+    
+            // Check if the response includes a valid UID and status
+            if (res && res.uid == uid && typeof res.isRead === "boolean") {
+                updateEmailReadStatus(uid, res.isRead);
+                success = true;
+            }
+        } catch (error) {
+            console.error("Failed to toggle read status:", error);
+        }
+    
+        if (!success) {
+            console.warn("Email read/unread update failed or returned unexpected result:", res);
+        }
+    });    
+
     submitButton.addEventListener("click", async () => {
         const userInput = inputField.value.trim();
         inputField.value = '';
@@ -46,18 +100,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         ipcRenderer.emit("showChat", null, { "role" : "user", "message" : userInput})
+        ipcRenderer.emit("showProcessing", null, "Processing input...")
         console.log("Submitting prompt:", userInput);
-
-        submitButton.disabled = true
-        loadingWheel.style.display = "block";
 
         try {
             await ipcRenderer.invoke("submitPrompt", userInput);
         } catch (error) {
             console.error("Error processing prompt:", error);
         }
-        submitButton.disabled = false
-        loadingWheel.style.display = "none";
+
+        ipcRenderer.emit("removeProcessing");
     });
 
     ipcRenderer.on('showEmail', (event, data) => {
@@ -72,8 +124,6 @@ document.addEventListener("DOMContentLoaded", async () => {
             existing.querySelector("p:nth-of-type(1)").innerHTML = `<strong>UID:</strong> ${email.uid}`;
             existing.querySelector("p:nth-of-type(2)").innerHTML = `<strong>Sender:</strong> ${email.sender || "Unknown"}`;
             existing.querySelector("p:nth-of-type(3)").innerHTML = `<strong>Read:</strong> ${email.isRead ? "Read" : "Unread"}`;
-            existing.querySelector("p:nth-of-type(4)").innerHTML = `<strong>Status:</strong> ${email.status}`;
-            existing.querySelector("p:nth-of-type(5)").innerHTML = `<strong>Processed:</strong> ${email.isProcessed ? "Yes" : "No"}`;
             existing.querySelector("p:nth-of-type(6)").innerHTML = `<strong>Summary:</strong> ${email.summary || "(Not summarized)"}`;
 
             existing.setAttribute("data-category", email.classification?.category?.toLowerCase() || "uncategorized");
@@ -88,25 +138,31 @@ document.addEventListener("DOMContentLoaded", async () => {
             emailElement.classList.add("email-entry");
             emailElement.setAttribute("data-category", email.classification?.category || "uncategorized");
             emailElement.setAttribute("data-priority", email.classification?.priority || "unknown");
-            emailElement.setAttribute("data-isRead", email.isRead ? "read" : "unread");
+            emailElement.setAttribute("data-isRead", email.isRead ? "read" : "unread");         
         
             emailElement.innerHTML = `
                 <h3>${email.subject}</h3>
-                <p><strong>UID:</strong> ${email.uid}</p>
                 <p><strong>Sender:</strong> ${email.sender || "Unknown"}</p>
-                <p><strong>Read:</strong> ${email.isRead ? "Read" : "Unread"}</p>
-                <p><strong>Status:</strong> ${email.status}</p>
-                <p><strong>Processed:</strong> ${email.isProcessed ? "Yes" : "No"}</p>
                 <p><strong>Summary:</strong> ${email.summary || "(Not summarized)"}</p>
+                <p><strong>Read:</strong> ${email.isRead ? "Read" : "Unread"}</p>
                 <p><strong>Priority:</strong> ${email.classification?.priority || "unknown"}</p>
                 <p><strong>Category:</strong> ${email.classification?.category || "uncategorized"}</p>
         
                 <div class="thumb-buttons">
-                    <button class="thumb-up" data-subject="${email.subject}">👍</button>
-                    <button class="thumb-down" data-subject="${email.subject}">👎</button>
+                    <button class="thumb-up">👍</button>
+                    <button class="thumb-down">👎</button>
                 </div>
                 <hr>
             `;
+
+            emailElement.addEventListener("click", () => {
+                currentDisplayedEmail?.classList.remove("selected");
+                emailToggleReadButton.innerText = email.isRead ? "Mark as Unread" : "Mark as Read";
+                showEmailDetail(email);
+                emailElement.classList.add("selected");
+                currentDisplayedEmail = emailElement
+                chatDisplayArea.style.overflow = "hidden"
+            });     
         
             emailDisplayArea.prepend(emailElement);
         }
@@ -138,6 +194,40 @@ document.addEventListener("DOMContentLoaded", async () => {
         `;
         chatDisplayArea.append(chatElement)
     });
+
+    ipcRenderer.on('showProcessing', (event, data) => {
+        if (processingElement) {
+            chatDisplayArea.style.overflow = "hidden"
+            processingElement.innerText = data.message;
+            processingElement.style.display = "block";
+            submitButton.disabled = true;
+            loadingWheel.style.display = "block";
+        }
+    });
+      
+    ipcRenderer.on('removeProcessing', () => {
+        if (processingElement) {
+            chatDisplayArea.style.overflowY = "scroll";
+            processingElement.style.display = "none";
+            submitButton.disabled = false;
+            loadingWheel.style.display = "none"
+        }
+    });
+
+    function showEmailDetail(email) {
+        const overlay = document.getElementById("emailDetailOverlay");
+        const iframe = document.getElementById("emailRawViewer");
+      
+        if (overlay && iframe) {
+            overlay.style.display = "flex";
+            iframe.srcdoc = email.raw_body || "<p>No content</p>";
+            if (email.isRead) {
+                emailToggleReadButton.textContent = "Mark as Unread";
+            } else {
+                emailToggleReadButton.textContent = "Mark as Read";
+            }
+        }
+    }   
     
     function setupCategoryEventListeners() {
         const categoryTabs = document.querySelectorAll(".category-tab");
