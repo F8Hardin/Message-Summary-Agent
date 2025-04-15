@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from app.tools import fetch_emails, get_stored_emails, updated_UIDs, remove_email, cleared_UIDs
+from app.tools import fetch_emails, get_stored_emails, updated_UIDs, remove_email, cleared_UIDs, classify_email, summarize_email, mark_as_read, unmark_as_read
 from app.agent import build_agent
 
 #run with uvicorn app.main:app --reload --port 9119
@@ -30,21 +30,28 @@ async def prompt_agent(request: AgentPrompt):
     global chatHistory
     global graph
     global updated_UIDs
+    global cleared_UIDs
+
+    cleared_UIDs.clear()
+    updated_UIDs.clear()
 
     try:
         state = await graph.ainvoke({
             "messages": chatHistory + [("user", request.user_input)],
         })
 
+        print("State", state)
         chatHistory = state["messages"]
 
         # print("Last updated:", lastUpdatedEmails)
         # print("Message from Agent:", state["messages"][-1])
         updated = updated_UIDs.copy() #tracking updated data
-        updated_UIDs.clear()
-
         cleared = cleared_UIDs.copy() #tracking deleted data
-        cleared_UIDs.clear()
+
+
+        print("API Returning Agent Message:", state["messages"][-1])
+        print("API Returning Updated UIDs:", updated)
+        print("API Returning Cleared UIDs:", cleared)
         return {
             "agent_message": state["messages"][-1],
             "updated_UIDs": updated,
@@ -69,7 +76,7 @@ async def trigger_fetch_emails():
 
 @app.get("/getStoredEmails")
 async def trigger_get_stored_emails():
-    return await get_stored_emails.ainvoke({})
+    return get_stored_emails()
 
 @app.get("/removeEmail")
 async def trigger_get_stored_emails(uid: int):
@@ -77,8 +84,24 @@ async def trigger_get_stored_emails(uid: int):
 
 @app.get("/getEmailById")
 async def get_email_by_id(uid: int):
-    emails = await get_stored_emails.ainvoke({})
+    emails = get_stored_emails()
     email = emails.get(uid)
     if not email:
         raise HTTPException(status_code=404, detail="Email not found.")
     return email
+
+@app.get("/classifyEmail")
+async def trigger_classify_email(uid: int):
+    return await classify_email.ainvoke({"uid": uid})
+
+@app.get("/summarizeEmail")
+async def trigger_summarize_email(uid: int):
+    return await summarize_email.ainvoke({"uid": uid})
+
+@app.get("/markAsRead")
+async def trigger_mark_as_read(uid: int):
+    return await mark_as_read.ainvoke({"uid": uid})
+
+@app.get("/unmarkAsRead")
+async def trigger_unmark_as_read(uid: int):
+    return await unmark_as_read.ainvoke({"uid": uid})
