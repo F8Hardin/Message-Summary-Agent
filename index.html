@@ -201,7 +201,10 @@
 
         #processingMessage {
           position: absolute;
+          top: 50%;
+          left: 50%;
           transform: translate(-50%, -50%);
+          z-index: 1000;
           background-color: rgba(0, 0, 0, 0.7);
           color: white;
           font-size: 18px;
@@ -209,7 +212,7 @@
           border-radius: 10px;
           text-align: center;
           display: none;
-          z-index: 1000;
+          box-sizing: border-box;
         }
 
         #emailDetailOverlay {
