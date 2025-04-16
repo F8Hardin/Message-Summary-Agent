@@ -40,7 +40,8 @@ async def prompt_agent(request: AgentPrompt):
             "messages": chatHistory + [("user", request.user_input)],
         })
 
-        print("State", state)
+        tool_calls = [msg for msg in state["messages"] if msg.get("role") == "tool"]
+        print("Tool calls from the state:", tool_calls)
         chatHistory = state["messages"]
 
         # print("Last updated:", lastUpdatedEmails)

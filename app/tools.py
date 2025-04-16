@@ -41,7 +41,6 @@ def clean_email_body_from_html(html: str) -> str:
     text = re.sub(r"\n\s*\n+", "\n\n", text)  # collapse multiple blank lines
     return text.strip()
 
-
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
 
@@ -51,7 +50,6 @@ def extract_text_from_html(html):
     text = soup.get_text(separator=" ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
 
 def extract_email_parts(msg):
     plain_text = None
@@ -132,7 +130,7 @@ def fetch_emails() -> dict:
                     "summary": None,
                     "classification": {"priority": None, "category": None},
                     "isRead": False,
-                    "date_time": msg.get("Date", "UNKNOWN")
+                    "dateTime": msg.get("Date", "UNKNOWN")
                 }
 
                 stored_emails[uid] = email_data
@@ -155,7 +153,6 @@ def fetch_emails() -> dict:
             } for e in emails
         ]
     }
-
 
 def get_stored_emails() -> list:
     """Return a list of all stored emails in memory.
@@ -186,80 +183,41 @@ def get_stored_email_with_uid(uid: int) -> dict:
     return email
 
 @tool
-def get_email_by_title(title: str) -> dict:
+def get_emails_by_data(field: str, query: str) -> dict:
     """
-    Return full details for an email whose subject contains the given title (case-insensitive).
+    When a user asks for emails of a certain criteria call this function.
 
-    This tool performs substring matching on the subject.
-    If multiple emails match, it returns the first found.
+    Return a dictionary mapping email UIDs to their field values for all emails
+    where the specified field contains the given query (case-insensitive).
+
+    For each email, the value is obtained by:
+       value = email.get(field, "")
+    If the value is a dictionary, it is converted to a space-separated string of its values.
+    All comparisons are performed in lowercase.
+
+    Parameters:
+        field (str): The name of the field to search (e.g., "subject", "sender", "summary", "classification").
+        query (str): The query string to search for as a substring.
+
+    Returns:
+        dict: A dictionary mapping matching email UIDs to the field value that matched.
+    
+    Example:
+        If an email has subject "Meeting with Robinhood Updates" and you call:
+            get_email_by_data("subject", "robinhood")
+        It might return: { 103: "meeting with robinhood updates" }
     """
-    #print(f"Searching for email with subject containing: {title}")
-    matched_email = None
+    query = query.lower().strip()
+    results = {}
     for email in stored_emails.values():
-        # Check if the provided title is a substring of the email subject
-        if title.lower() in email["subject"].lower():
-            matched_email = email
-            break
-    if not matched_email:
-        return {"error": f"No email found with subject containing '{title}'."}
-    return {
-        "uid": matched_email["uid"],
-        "subject": matched_email["subject"],
-        "sender": matched_email["sender"],
-        "isRead": matched_email.get("isRead", False),
-        "summary": matched_email.get("summary"),
-        "classification": matched_email.get("classification"),
-        "body": matched_email["body"]
-    }
-
-@tool
-def get_emails_by_sender(sender: str) -> list:
-    """
-    Return the UIDs of emails sent by the specified sender.
-
-    This tool is useful for narrowing down emails from a particular person or service.
-    It only returns UID values to conserve context space.
-
-    To retrieve details (e.g., subject, body, summary), use `get_data_by_id` or related tools after obtaining UIDs.
-
-    Example usage:
-    - sender = "example@email.com"
-    """
-    return [
-        email["uid"]
-        for email in stored_emails.values()
-        if email["sender"].lower() == sender.lower()
-    ]
-
-@tool
-def get_emails_by_classification(priority: str = None, category: str = None) -> list:
-    """
-    Return the UID of emails matching a given priority and/or category.
-
-    This tool helps filter stored emails by their classification fields without returning
-    full content or headers, in order to minimize token usage and preserve context.
-
-    Each result includes:
-    - uid: The unique identifier of the email
-    - classification: A dictionary with "priority" and "category" fields
-
-    To retrieve full email data (such as subject, body, or summary), use tools like get_email_by_uid.
-
-    Example usage:
-    - priority="important"
-    - category="work"
-    - priority="not important", category="spam"
-    """
-    results = []
-    for email in stored_emails.values():
-        classification = email.get("classification", {})
-        if (
-            (priority is None or classification.get("priority") == priority) and
-            (category is None or classification.get("category") == category)
-        ):
-            results.append({
-                "uid": email["uid"],
-            })
+        value = email.get(field, "")
+        if isinstance(value, dict):
+            value_str = " ".join([str(v) for v in value.values()])
+        else:
+            value_str = str(value)
+        value_str_lower = value_str.lower().strip()
+        if query in value_str_lower:
+            results[email["uid"]] = value
     return results
 
 @tool
@@ -296,6 +254,20 @@ def get_data_by_id(uid: int, field: str) -> dict:
     value = email.get(field, f"Field '{field}' not found in email.")
     return {"uid": uid, "field": field, "value": value}
 
+@tool
+def get_stored_email_uids() -> list:
+    """
+    Return a list of UIDs for all stored emails in memory.
+
+    This tool returns only the unique identifiers (UIDs) of the emails,
+    so that the agent can use these UIDs to retrieve specific email data
+    via other tools (e.g., get_data_by_id).
+
+    Example return value:
+    [101, 102, 103, ...]
+    """
+    print("Returning stored email UIDs...")
+    return list(stored_emails.keys())
 
 @tool
 def summarize_email(uid: int) -> dict:
@@ -533,9 +505,8 @@ toolList = [
     unmark_as_read,
     get_last_updated_emails,
     get_stored_email_with_uid,
-    get_email_by_title,
-    get_emails_by_classification,
-    get_emails_by_sender,
+    get_emails_by_data,
     remove_email,
-    get_data_by_id
+    get_data_by_id,
+    get_stored_email_uids
 ]

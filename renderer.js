@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
         const response = await fetch('categories.json');
         const categoryData = await response.json();
-        const categories = categoryData.categories;
+        const categories = categoryData.categories;0.
 
         console.log(categories)
 
@@ -53,6 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (readField) {
             readField.innerHTML = `<strong>Read:</strong> ${isRead ? "Read" : "Unread"}`;
         }
+        updateCategoryFilter();
     }
 
     emailCloseButton.addEventListener("click", () => {
@@ -113,7 +114,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     ipcRenderer.on('showEmail', (event, data) => {
-        console.log("Received email data from AI:", data);
+        console.log("Received email data from AI:", data.summary);
     
         const email = data;
     
@@ -121,17 +122,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         const existing = document.querySelector(`.email-entry[data-uid="${email.uid}"]`);
         if (existing) {
             existing.querySelector("h3").textContent = email.subject;
-            existing.querySelector("p:nth-of-type(1)").innerHTML = `<strong>UID:</strong> ${email.uid}`;
-            existing.querySelector("p:nth-of-type(2)").innerHTML = `<strong>Sender:</strong> ${email.sender || "Unknown"}`;
+            existing.querySelector("p:nth-of-type(1)").innerHTML = `<strong>Sender:</strong> ${email.sender || "Unknown"}`;
+            existing.querySelector("p:nth-of-type(2)").innerHTML = `<strong>Summary:</strong> ${email.summary || "(Not summarized)"}`;
             existing.querySelector("p:nth-of-type(3)").innerHTML = `<strong>Read:</strong> ${email.isRead ? "Read" : "Unread"}`;
-            existing.querySelector("p:nth-of-type(6)").innerHTML = `<strong>Summary:</strong> ${email.summary || "(Not summarized)"}`;
 
             existing.setAttribute("data-category", email.classification?.category?.toLowerCase() || "uncategorized");
             existing.setAttribute("data-priority", email.classification?.priority?.toLowerCase() || "unknown");
             existing.setAttribute("data-isRead", email.isRead ? "read" : "unread");
 
-            existing.querySelector("p:nth-of-type(7)").innerHTML = `<strong>Priority:</strong> ${email.classification?.priority || "unknown"}`;
-            existing.querySelector("p:nth-of-type(8)").innerHTML = `<strong>Category:</strong> ${email.classification?.category || "uncategorized"}`;
+            existing.querySelector("p:nth-of-type(4)").innerHTML = `<strong>Priority:</strong> ${email.classification?.priority || "unknown"}`;
+            existing.querySelector("p:nth-of-type(5)").innerHTML = `<strong>Category:</strong> ${email.classification?.category || "uncategorized"}`;
         } else {
             const emailElement = document.createElement("div");
             emailElement.setAttribute("data-uid", email.uid);
@@ -242,6 +242,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const allEmailEntries = document.querySelectorAll(".email-entry");
 
         allEmailEntries.forEach(email => {
+            console.log(email.getAttribute("data-isRead"))
             if (category === "all" 
             || email.getAttribute("data-category") === category 
             || email.getAttribute("data-priority") === category
