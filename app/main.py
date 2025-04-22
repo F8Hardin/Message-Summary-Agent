@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from app.tools import fetch_emails, get_stored_emails, updated_UIDs, remove_email, cleared_UIDs, classify_email, summarize_email, mark_as_read, unmark_as_read
+from app.tools import fetch_emails, get_stored_emails, stored_emails, remove_email, classify_email, summarize_email, mark_as_read, unmark_as_read
 from app.agent import build_agent
+from langchain.schema import AIMessage
+from typing import List
 
 #run with uvicorn app.main:app --reload --port 9119
 
@@ -29,39 +31,35 @@ class AgentPrompt(BaseModel):
 async def prompt_agent(request: AgentPrompt):
     global chatHistory
     global graph
-    global updated_UIDs
-    global cleared_UIDs
-
-    cleared_UIDs.clear()
-    updated_UIDs.clear()
 
     try:
         state = await graph.ainvoke({
             "messages": chatHistory + [("user", request.user_input)],
         })
 
-        tool_calls = [msg for msg in state["messages"] if msg.get("role") == "tool"]
-        print("Tool calls from the state:", tool_calls)
         chatHistory = state["messages"]
 
-        # print("Last updated:", lastUpdatedEmails)
-        # print("Message from Agent:", state["messages"][-1])
-        updated = updated_UIDs.copy() #tracking updated data
-        cleared = cleared_UIDs.copy() #tracking deleted data
+        msgs = state["messages"]
 
+        last_calls = []
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, AIMessage):
+                tc = msg.additional_kwargs.get("tool_calls")
+                if tc:
+                    last_calls = tc
+                    break
 
-        print("API Returning Agent Message:", state["messages"][-1])
-        print("API Returning Updated UIDs:", updated)
-        print("API Returning Cleared UIDs:", cleared)
+        print("API Agent State Response:", state)
         return {
-            "agent_message": state["messages"][-1],
-            "updated_UIDs": updated,
-            "cleared_UIDs" : cleared
+            "agent_message": msgs[-1],
+            "tool_calls" : last_calls
         }
 
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
+
+        print("API Error from agent:", e)
 
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -79,17 +77,26 @@ async def trigger_fetch_emails():
 async def trigger_get_stored_emails():
     return get_stored_emails()
 
+@app.get("/getStoredEmailsWithUIDs")
+async def get_stored_emails_with_uids(uids: List[int] = Query(..., description="One or more email UIDs to fetch, e.g. ?uids=101&uids=30558")):
+    return [
+        email_obj
+        for uid, email_obj in stored_emails.items()
+        if uid in uids
+    ]
+
 @app.get("/removeEmail")
-async def trigger_get_stored_emails(uid: int):
+async def trigger_remove_email(uid: int):
     return await remove_email.ainvoke({})
 
-@app.get("/getEmailById")
+@app.get("/getEmailById") #not yet tested
 async def get_email_by_id(uid: int):
     emails = get_stored_emails()
-    email = emails.get(uid)
-    if not email:
-        raise HTTPException(status_code=404, detail="Email not found.")
-    return email
+    for email_obj in emails:
+        if email_obj.get("uid") == uid:
+            return email_obj
+
+    raise HTTPException(status_code=404, detail=f"No email found with UID {uid}")
 
 @app.get("/classifyEmail")
 async def trigger_classify_email(uid: int):

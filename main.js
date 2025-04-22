@@ -152,27 +152,67 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
     const result = await res.json();
 
     console.log("Agent Message:", result.agent_message.content);
-    console.log("UIDs:", result.updated_UIDs);
-    const updatedUIDKeys = Object.keys(result.updated_UIDs);
-    console.log("Updated UID Keys:", updatedUIDKeys);
-    const clearedUIDKeys = result.cleared_UIDs;
-    console.log("Cleared UID keys:", clearedUIDKeys);
+    console.log("Tool Calls:", result.tool_calls);
+    
+    const updatedUIDs = new Set();
+    const clearedUIDs = new Set();
+    
+    for (const call of result.tool_calls) {
+      const toolName = call.function.name;
+      let args;
+      try {
+        args = JSON.parse(call.function.arguments);
+      } catch (e) {
+        console.warn("Could not parse args for", toolName, call.function.arguments);
+        continue;
+      }
+    
+      const uid = args.uid;
+      if (typeof uid !== "number") continue;
+    
+      switch (toolName) {
+        case "remove_email":
+          clearedUIDs.add(uid);
+          break;
+    
+        default:
+          updatedUIDs.add(uid);
+          break;
+      }
+    }
+    
+    console.log("Updated UIDs:", updatedUIDs);
+    console.log("Cleared UIDs:", clearedUIDs);
 
-    // Display the LLM's response (not yet implemented on UI)
+    //getting updates
+    if (updatedUIDs.size > 0) {
+      const params = new URLSearchParams();
+      updatedUIDs.forEach(uid => params.append("uids", uid));
+      const response = await fetch(
+        `${process.env.PYAGENT_ENDPOINT}/getStoredEmailsWithUIDs?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch emails: ${response.statusText}`);
+      }
+
+      // render updated
+      const emailsArray = await response.json();
+      emailsArray.forEach(emailObj => showEmail(emailObj));
+    }
+    
+    // remove cleared
+    for (const uid of clearedUIDs) {
+      removeEmail(uid);
+    }
+
     showChat({ role: "Agent", message: result.agent_message.content });
-
-    // Iterate and show updated emails
-    for (let i = 0; i < updatedUIDKeys.length; i++) {
-      const key = updatedUIDKeys[i];
-      const value = result.updated_UIDs[key];
-      showEmail(value);
-    }
-
-
-    for (let i = 0; i < clearedUIDKeys.length; i++) {
-      removeEmail(clearedUIDKeys[i]);
-    }
-
     isAgentProcessing = false;
     removeProcessingMessage()
     return result.agent_message;

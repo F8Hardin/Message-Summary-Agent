@@ -15,10 +15,7 @@ import quopri
 with open(os.path.join(os.path.dirname(__file__), "../categories.json"), "r") as f:
     CATEGORY_DATA = json.load(f)
 
-stored_emails = {} #all emails
-
-updated_UIDs = {} #emails that have been updated the current agent call
-cleared_UIDs = set() #emails that the user wants cleared from the UI
+stored_emails = {} #all emails, acts as the database for now - updating this will replace with API calls to DB
 
 def clean_text(text):
     return " ".join(text.split()) if text else ""
@@ -149,7 +146,6 @@ def fetch_emails() -> dict:
                 }
 
                 stored_emails[uid] = email_data
-                updated_UIDs[uid] = email_data
                 emails.append(email_data)
 
         mail.logout()
@@ -195,7 +191,15 @@ def get_stored_email_with_uid(uid: int) -> dict:
     if not email:
         return {"error": f"No email found with UID {uid}"}
     
-    return email
+    return {
+        "uid":            email["uid"],
+        "subject":        email["subject"],
+        "sender":         email["sender"],
+        "body":           email["body"],
+        "summary":        email["summary"],
+        "classification": email["classification"],
+        "isRead":         email["isRead"],
+    }
 
 @tool
 def get_emails_by_data(field: str, query: str) -> dict:
@@ -317,7 +321,6 @@ def summarize_email(uid: int) -> dict:
     test_summary = os.getenv("TEST_SUMMARY", "false").lower() in ("true", "1", "yes")
     if test_summary:
         email_obj["summary"] = "This is a test summary"
-        updated_UIDs[uid] = email_obj
         stored_emails[uid] = email_obj
         return { "uid" : uid , "summary" : email_obj["summary"]}
 
@@ -345,7 +348,6 @@ def summarize_email(uid: int) -> dict:
         return { "uid" : uid , "summary" : "No summary returned."}
 
     email_obj["summary"] = content.strip()
-    updated_UIDs[uid] = email_obj
     stored_emails[uid] = email_obj
     print("Successfully summarized.")
     return { "uid" : uid , "summary" : email_obj["summary"]}
@@ -378,7 +380,6 @@ def classify_email(uid: int) -> dict:
             "priority": priority,
             "category": category
         }
-        updated_UIDs[uid] = email_obj
         stored_emails[uid] = email_obj
         return { "uid" : uid , "classification" : { "priority" : priority, "category" : category}}
 
@@ -423,7 +424,6 @@ def classify_email(uid: int) -> dict:
         end = content.rindex("}") + 1
         classification = json.loads(content[start:end])
         email_obj["classification"] = classification
-        updated_UIDs[uid] = email_obj
         stored_emails[uid] = email_obj
         return {
             "uid": uid,
@@ -457,7 +457,6 @@ def mark_as_read(uid: int) -> dict:
         if result[0] == "OK":
             if uid in stored_emails:
                 stored_emails[uid]["isRead"] = True
-                updated_UIDs[uid] = stored_emails[uid]
                 return { "uid" : uid, "isRead" : stored_emails[uid]["isRead"]}
         return { "uid" : uid, "isRead" : "ERROR: Could not find Email."}
     except Exception as e:
@@ -484,7 +483,6 @@ def unmark_as_read(uid: int) -> dict:
         if result[0] == "OK":
             if uid in stored_emails:
                 stored_emails[uid]["isRead"] = False
-                updated_UIDs[uid] = stored_emails[uid]
                 return { "uid" : uid, "isRead" : stored_emails[uid]["isRead"]}
         return { "uid" : uid, "isRead" : "ERROR: Could not find Email."}
     except Exception as e:
@@ -492,18 +490,12 @@ def unmark_as_read(uid: int) -> dict:
         return { "uid": uid, "isRead": "UNKNOWN ERROR MARKING UNREAD" }
 
 @tool
-def get_last_updated_emails() -> list:
-    """Return the the most recently updated emails from memory."""
-    #print("Returning last updated emails...")
-    return list(updated_UIDs.values())
-
-@tool
 def remove_email(uid: int) -> dict:
     """
     Remove an email from the stored emails by its UID.
 
     This tool deletes the specified email from the database,
-    and updates the cleared_UIDs collection to track removed emails. It returns a
+    and the tool call is checked on the frontend to track removed emails. It returns a
     structured response that includes the UID of the removed email. If the email is
     not found or an error occurs, an appropriate error message is returned.
     """
@@ -511,7 +503,6 @@ def remove_email(uid: int) -> dict:
     try:
         removedEmail = stored_emails.pop(uid, None)
         if removedEmail:
-            cleared_UIDs.add(uid)
             return { "uid" : uid }
         else:
             return { "uid" : "Failed to remove email. UID not found."}
@@ -524,7 +515,6 @@ toolList = [
     classify_email,
     mark_as_read,
     unmark_as_read,
-    get_last_updated_emails,
     get_stored_email_with_uid,
     get_emails_by_data,
     remove_email,
