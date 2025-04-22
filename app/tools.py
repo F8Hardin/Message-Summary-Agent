@@ -8,15 +8,15 @@ import requests
 import os
 import random
 from langchain.tools import tool
-from bs4 import BeautifulSoup
 import re
+import quopri
 
 # Load categories for classification
 with open(os.path.join(os.path.dirname(__file__), "../categories.json"), "r") as f:
     CATEGORY_DATA = json.load(f)
 
 stored_emails = {} #all emails
-#these can be removed once the agent returns them in a strucutred output
+
 updated_UIDs = {} #emails that have been updated the current agent call
 cleared_UIDs = set() #emails that the user wants cleared from the UI
 
@@ -60,28 +60,43 @@ def extract_email_parts(msg):
             content_type = part.get_content_type()
             content_disposition = part.get("Content-Disposition", "")
 
+            # skip attachments
             if "attachment" in content_disposition.lower():
                 continue
 
             try:
-                payload = part.get_payload(decode=True)
-                if not payload:
-                    continue
-                decoded = payload.decode(errors="ignore")
+                # HTML branch unchanged
+                if content_type == "text/html" and not html_text:
+                    raw = part.get_payload(decode=True) or b""
+                    html_text = raw.decode(part.get_content_charset() or "utf-8", errors="ignore").strip()
 
-                if content_type == "text/plain" and not plain_text:
-                    plain_text = decoded.strip()
-                elif content_type == "text/html" and not html_text:
-                    html_text = decoded.strip()
+                # new plain‐text branch
+                elif content_type == "text/plain" and not plain_text:
+                    cte = part.get("Content-Transfer-Encoding", "").lower()
+                    raw_payload = part.get_payload(decode=False) or b""
+                    if "quoted-printable" in cte:
+                        decoded_bytes = quopri.decodestring(raw_payload)
+                    else:
+                        decoded_bytes = part.get_payload(decode=True) or b""
+                    charset = part.get_content_charset() or "utf-8"
+                    plain_text = decoded_bytes.decode(charset, errors="replace").strip()
+
             except Exception as e:
                 print("Error decoding email part:", e)
+
     else:
+        # single‐part fallback stays the same
         try:
-            payload = msg.get_payload(decode=True)
-            decoded = payload.decode(errors="ignore") if payload else ""
-            return decoded.strip(), decoded.strip()  # both same if only one format exists
+            payload = msg.get_payload(decode=True) or b""
+            decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+            return decoded.strip(), decoded.strip()
         except Exception:
             return "", ""
+
+    # final fallback: if no plain_text but have html_text, strip tags
+    if not plain_text and html_text:
+        soup = BeautifulSoup(html_text, "html.parser")
+        plain_text = soup.get_text(separator="\n").strip()
 
     return plain_text or "", html_text or ""
 
@@ -321,7 +336,7 @@ def summarize_email(uid: int) -> dict:
     )
 
     if not response.ok:
-        print("Summarization failed:", response.status_code)
+        print("Summarization FAILED:", response.json())
         return { "uid" : uid , "summary" : "Summarization failed: {response.status_code}"}
 
     content = response.json().get("choices", [{}])[0].get("message", {}).get("content")
@@ -397,6 +412,11 @@ def classify_email(uid: int) -> dict:
         },
     )
 
+    
+    if not response.ok:
+        print("Classification FAILED:", response)
+        return { "uid" : uid , "classification" : { "priority" : "FAILED", "category" : "FAILED"}}
+
     content = response.json().get("choices", [{}])[0].get("message", {}).get("content")
     try:
         start = content.index("{")
@@ -413,7 +433,8 @@ def classify_email(uid: int) -> dict:
             }
         }
     except Exception as e:
-        print("Failed to parse classification:", e)
+        print("Classification FAILED:", e)
+        print("Classification response:", response.json())
         return { "uid" : uid , "classification" : { "priority" : "FAILED TO PARSE", "category" : "FAILED TO PARSE"}}
 
 @tool
