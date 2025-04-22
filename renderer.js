@@ -42,14 +42,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         console.error("Error loading categories:", error);
     }
 
-    function updateEmailReadStatus(uid, isRead) {
-        if (!currentDisplayedEmail || currentDisplayedEmail.getAttribute("data-uid") !== uid) return;
+    function updateEmailReadStatus(uid, isRead, emailToUpdate) {
+        if (!emailToUpdate || emailToUpdate.getAttribute("data-uid") !== uid) return;
     
-        currentDisplayedEmail.setAttribute("data-isRead", isRead ? "read" : "unread");
+        emailToUpdate.setAttribute("data-isRead", isRead ? "read" : "unread");
 
-        emailToggleReadButton.innerText = isRead ? "Mark as Unread" : "Mark as Read";
+        if (emailToUpdate == currentDisplayedEmail){ //ensure this email is still displayed
+            emailToggleReadButton.innerText = isRead ? "Mark as Unread" : "Mark as Read";
+        }
     
-        const readField = currentDisplayedEmail.querySelector("p:nth-of-type(3)");
+        const readField = emailToUpdate.querySelector("p:nth-of-type(3)");
         if (readField) {
             readField.innerHTML = `<strong>Read:</strong> ${isRead ? "Read" : "Unread"}`;
         }
@@ -64,8 +66,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     emailToggleReadButton.addEventListener("click", async () => {
-        let readStatus = currentDisplayedEmail.getAttribute("data-isRead");
-        let uid = currentDisplayedEmail.getAttribute("data-uid");
+        let emailToUpdate = currentDisplayedEmail
+        let readStatus = emailToUpdate.getAttribute("data-isRead");
+        let uid = emailToUpdate.getAttribute("data-uid");
     
         let res = null;
         let success = false;
@@ -79,7 +82,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     
             // Check if the response includes a valid UID and status
             if (res && res.uid == uid && typeof res.isRead === "boolean") {
-                updateEmailReadStatus(uid, res.isRead);
+                updateEmailReadStatus(uid, res.isRead, emailToUpdate);
                 success = true;
             }
         } catch (error) {
