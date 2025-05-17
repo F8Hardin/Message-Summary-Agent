@@ -20,30 +20,54 @@ stored_emails = {} #all emails, acts as the database for now - updating this wil
 def clean_text(text):
     return " ".join(text.split()) if text else ""
 
+import re
+from bs4 import BeautifulSoup, Comment
+
 def clean_email_body_from_html(html: str) -> str:
     if not html:
         return "ERROR: HTML Body not received."
-
+    
     soup = BeautifulSoup(html, "html.parser")
 
-    # Remove script/style tags
-    for tag in soup(["script", "style"]):
+    # 1) Remove tags that are never useful
+    for tag in soup(["script", "style", "head", "meta", "link"]):
         tag.decompose()
 
-    # Replace <br> and <p> with line breaks
-    for br in soup.find_all(["br", "p"]):
-        br.insert_before("\n")
+    # 2) Remove all images (including base64 inline)
+    for img in soup.find_all("img"):
+        img.decompose()
 
+    # 3) Remove HTML comments
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+
+    # 4) Replace <br> and block tags with newlines
+    for block in soup.find_all(["br", "p", "div", "li"]):
+        block.insert_before("\n")
+
+    # 5) Get text and collapse multiple blank lines
     text = soup.get_text()
-    text = re.sub(r"\n\s*\n+", "\n\n", text)  # collapse multiple blank lines
+    # Normalize whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    # Collapse more than 2 newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    
+    # 6) Strip leading/trailing whitespace
     return text.strip()
 
-def extract_text_from_html(html):
+def extract_text_from_html(html: str) -> str:
+    if not html:
+        return ""
+
     soup = BeautifulSoup(html, "html.parser")
 
-    for script in soup(["script", "style"]):
-        script.extract()
+    # Remove scripts/styles/comments as above
+    for tag in soup(["script", "style", "head", "meta", "link", "img"]):
+        tag.decompose()
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
 
+    # Get text with single-space separation
     text = soup.get_text(separator=" ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -97,7 +121,7 @@ def extract_email_parts(msg):
 
     return plain_text or "", html_text or ""
 
-@tool
+@tool #removed as tool
 def fetch_emails() -> dict:
     """
     Fetch new, unread emails and store them in memory.
@@ -226,6 +250,7 @@ def get_emails_by_data(field: str, query: str) -> dict:
             get_email_by_data("subject", "robinhood")
         It might return: { 103: "meeting with robinhood updates" }
     """
+    print("Getting emails by data:", field, ":", query)
     query = query.lower().strip()
     results = {}
     for email in stored_emails.values():
@@ -273,7 +298,7 @@ def get_data_by_id(uid: int, field: str) -> dict:
     value = email.get(field, f"Field '{field}' not found in email.")
     return {"uid": uid, "field": field, "value": value}
 
-@tool
+@tool #removed as tool
 def get_stored_email_uids() -> list:
     """
     Return a list of UIDs for all stored emails in memory.
@@ -303,12 +328,11 @@ def summarize_email(uid: int) -> dict:
 
     system_prompt = (
         "You are an email summarization assistant. "
-        "You will be given the plain-text content of an email. "
-        "If the content is malformed, contains broken HTML, or lacks a clear message, "
-        "DO NOT speculate. Just state 'The content could not be understood.' "
+        "You will be given an email. "
+        "Summarize the main content of the email."
+        "If unable to summarize - DO NOT speculate. Just state 'The content could not be understood.' "
         "Otherwise, summarize the key points in 2-3 sentences."
     )
-
 
     email_obj = stored_emails.get(uid)
     #print("Summarizing an email:", email_obj)
@@ -331,7 +355,7 @@ def summarize_email(uid: int) -> dict:
             "model": os.environ["OPENAI_MODEL"],
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"You are a helpful assistant that summarizes emails in plain English. Summarize the following email in 1–3 clear sentences. Do not include the original email text. Do not use any formatting like bullets or markdown. Return only the summary. Summarize the following email:\n\n{email_obj['body']}"}
+                {"role": "user", "content": f"Summarize the following email:\n\n{email_obj['body']}"}
             ],
             "temperature": 0,
             "max_tokens": 150,
@@ -510,7 +534,6 @@ def remove_email(uid: int) -> dict:
         return { "uid" : "Failed to remove email. Exception occurred." }
 
 toolList = [
-    fetch_emails,
     summarize_email,
     classify_email,
     mark_as_read,
@@ -518,6 +541,5 @@ toolList = [
     get_stored_email_with_uid,
     get_emails_by_data,
     remove_email,
-    get_data_by_id,
-    get_stored_email_uids
+    get_data_by_id
 ]

@@ -36,13 +36,18 @@
       
         #categoryTabs {
           display: flex;
+          flex-wrap: wrap;
           gap: 10px;
           margin-bottom: 10px;
           flex-shrink: 0;
           width: 100%;
+          justify-content: center;
         }
       
         .category-tab {
+          flex: 1 1 120px;
+          min-width: 100px;
+          max-width: 150px;
           padding: 10px 15px;
           cursor: pointer;
           background: gray;
@@ -50,6 +55,9 @@
           transition: background 0.2s;
           text-align: center;
           display: inline-block;
+          box-sizing: border-box;
+          white-space: nowrap;
+          font-size: 12px;
         }
       
         .category-tab.active {

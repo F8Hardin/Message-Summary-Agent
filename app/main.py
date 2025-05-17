@@ -37,29 +37,51 @@ async def prompt_agent(request: AgentPrompt):
             "messages": chatHistory + [("user", request.user_input)],
         })
 
+        before_len = len(chatHistory)
+        new_messages = state["messages"][before_len:]
         chatHistory = state["messages"]
 
         msgs = state["messages"]
 
+        #get tool calls
         last_calls = []
-        for msg in reversed(state["messages"]):
+        for msg in new_messages:
             if isinstance(msg, AIMessage):
-                tc = msg.additional_kwargs.get("tool_calls")
-                if tc:
-                    last_calls = tc
-                    break
+                tc = msg.additional_kwargs.get("tool_calls") or []
+                last_calls.extend(tc)  
 
         print("API Agent State Response:", state)
         return {
             "agent_message": msgs[-1],
             "tool_calls" : last_calls
         }
+    
+    # except RecursionLimitError as e:
+    #     # e.messages is the list of all messages up to the failure
+    #     partial = e.messages  
+    #     # figure out which ones are “new”
+    #     new_messages = partial[len(chatHistory):]
+    #     chatHistory = partial
+
+    #     #get tool calls
+    #     last_calls = []
+    #     for msg in new_messages:
+    #         if isinstance(msg, AIMessage):
+    #             tc = msg.additional_kwargs.get("tool_calls") or []
+    #             last_calls.extend(tc)
+
+    #     return {
+    #         "agent_message": partial[-1],          # last AI thought before crash
+    #         "tool_calls":    last_calls,           # any tool calls it made
+    #         "warning":       "Hit recursion limit" # so caller can distinguish it
+    #     }
 
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
 
         print("API Error from agent:", e)
+        print("Error details:", e.__class__.__module__, e.__class__.__name__)
 
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -151,6 +151,12 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
     });
     const result = await res.json();
 
+    if (res.status == 500){
+      showChat({ role: "Agent", message: result.error});
+      console.error("Server error:", result.error);
+      console.error("Trace:", result.trace);
+    }
+
     console.log("Agent Message:", result.agent_message.content);
     console.log("Tool Calls:", result.tool_calls);
     
@@ -218,7 +224,7 @@ ipcMain.handle('submitPrompt', async (event, userInput) => {
     return result.agent_message;
   } catch (err) {
     console.error("Agent processing failed:", err);
-    showChat({ role: "Agent", message: "Agent processing error." });
+    showChat({ role: "Agent", message: "Agent processing error."});
     isAgentProcessing = false;
     removeProcessingMessage();
     return "An error occurred while processing your prompt.";
